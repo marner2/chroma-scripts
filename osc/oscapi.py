@@ -13,7 +13,7 @@ def handle_timeout(self):
 
 CLEAR_TIME = 5 #5 seconds before it clears stuff
 STAGING = False #don't do the actual writing. also print shit out.
-DEBUG = True 
+DEBUG = False 
 
 def clampv(low,x,high):
     return max(low, min(x, high))
@@ -76,6 +76,9 @@ class ColorsIn:
         #apply our opacity rules
         pixels = self.applyOpacity(self.layers.values())
         if not STAGING:
+            self.streamer.pixels = pixels
+	    self.streamer.metadata = self.layers[self.activepid].chroma
+            #pixels = self.crazyMofoingReorderingOfLights(pixels)
             octoapi.write(pixels)
         if DEBUG:
             for layer in self.layers.values():
@@ -134,104 +137,6 @@ class ColorsIn:
             self.handleClearing()
             self.server.handle_request()
 
-    def start(self):
-        #server = OSCServer( ("128.174.251.39", 11661) )
-        self.server = OSCServer( ("localhost", 11661) )
-        self.server.timeout = 0
-        self.lastwrite = time.time()        
-        self.server.handle_timeout = types.MethodType(handle_timeout, self.server)
-        self.server.lastpixels = [(0,0,0)]*24
-
-        self.layers = {}
-        self.activepid = 0
-        self.lastclear = time.time()
-        self.lastwriteany = 0
-
-        self.server.addMsgHandler( "/setcolors", self.set_colors)
-        while True:
-            self.each_frame()
-
-        self.server.close()
-
-
-class Layer:
-    FADEIN = 1
-    FADEOUT = -1
-
-    def __init__(self, chroma, opacity, state):
-        self.chroma = chroma
-        self.opacity = opacity
-        self.state = state
-
-
-"""
-The Chroma OSC Message structure:
-    HEADER
-        header length (1 int, in number of messages, not bytes)
-        pid (int)
-        name of animation (string)
-        class of stream (string)
-        framenumber (int)
-        timestamp
-        ---reserved for future use---
-    DATA
-        72 Floats
-"""
-class ChromaMessage:
-    def __init__(self, data, title, streamclass, framenumber, timestamp=0, pid=0):
-        self.data = data
-        self.title = title
-        self.streamclass = streamclass
-        self.framenumber = framenumber
-        self.timestamp = timestamp
-        self.pid = pid
-
-    def toOSC(self, messagename):
-        message = OSCMessage(messagename)
-        message.append(6)
-        message.append(os.getpid())
-        message.append(self.title)
-        message.append(self.streamclass)
-        message.append(self.framenumber)
-        message.append(time.time())
-        message.append(self.data)
-        return message
-
-    @staticmethod
-    def fromOSC(tags, args):
-        headerlength = args[0]
-        pid = args[1]
-        name = args[2]
-        streamclass = args[3]
-        framenumber = args[4]
-        timestamp = args[5]
-        pixels = []
-        for i in range(0,(len(args)-headerlength)/3):
-            pixel = (clamp(args[i*3+headerlength]), clamp(args[i*3+1+headerlength]), clamp(args[i*3+2+headerlength]))
-            pixels.append( pixel )
-        return ChromaMessage(pixels,name,streamclass,framenumber, timestamp, pid)
-    
-
-
-
-
-class ColorsOut:
-
-    def __init__(self, title="demo", streamclass="something"):
-        self.client = OSCClient()
-        self.client.connect( ("localhost",11661) )
-        self.title = title 
-        self.framenumber = 0
-        self.streamclass = streamclass
-
-    def write(self, pixels):
-        pixels = self.crazyMofoingReorderingOfLights(pixels)
-        chroma = ChromaMessage(pixels, self.title, self.streamclass, self.framenumber)
-        message = chroma.toOSC("/setcolors")
-        self.client.send( message )
-        self.framenumber += 1
-
-
 
     def crazyMofoingReorderingOfLights(self, pixels):
         pixels2 = pixels[:] #make a copy so we don't kerplode someone's work
@@ -267,10 +172,155 @@ class ColorsOut:
             pixels2[actualorder[i]] = (r,g,b)
         for i in range(len(badcolors)):
             pixels2[badcolors[i]] = (0.0,0.0,0.0)
-
-
-
         return pixels2
+
+
+    def start(self):
+        #server = OSCServer( ("128.174.251.39", 11661) )
+        self.server = OSCServer( ("localhost", 11661) )
+        self.server.timeout = 0
+        self.lastwrite = time.time()        
+        self.server.handle_timeout = types.MethodType(handle_timeout, self.server)
+        self.server.lastpixels = [(0,0,0)]*24
+
+        self.layers = {}
+        self.activepid = 0
+        self.lastclear = time.time()
+        self.lastwriteany = 0
+
+        self.streamer = StreamPoster()
+        self.streamer.start()
+
+        self.server.addMsgHandler( "/setcolors", self.set_colors)
+        while True:
+            self.each_frame()
+
+        self.server.close()
+
+
+class Layer:
+    FADEIN = 1
+    FADEOUT = -1
+
+    def __init__(self, chroma, opacity, state):
+        self.chroma = chroma
+        self.opacity = opacity
+        self.state = state
+
+
+"""
+The Chroma OSC Message structure:
+    HEADER
+        header length (1 int, in number of messages, not bytes)
+        pid (int)
+        name of animation (string)
+        class of stream (string)
+        framenumber (int)
+        timestamp
+        ---reserved for future use---
+    DATA
+        72 Floats
+"""
+class ChromaMessage:
+    def __init__(self, data, title, streamclass, framenumber, creator, description, timestamp=0, pid=0):
+        self.data = data
+        self.title = title
+        self.streamclass = streamclass
+        self.framenumber = framenumber
+        self.timestamp = timestamp
+        self.pid = pid
+	self.creator = creator
+	self.description = description
+
+    def toOSC(self, messagename):
+        message = OSCMessage(messagename)
+        message.append(8)
+        message.append(os.getpid())
+        message.append(self.title)
+        message.append(self.streamclass)
+        message.append(self.framenumber)
+        message.append(time.time())
+	message.append(self.creator)
+	message.append(self.description)
+        message.append(self.data)
+        return message
+
+    @staticmethod
+    def fromOSC(tags, args):
+        headerlength = args[0]
+        pid = args[1]
+        name = args[2]
+        streamclass = args[3]
+        framenumber = args[4]
+        timestamp = args[5]
+	creator = args[6]
+	description = args[7]
+        pixels = []
+        for i in range(0,(len(args)-headerlength)/3):
+            pixel = (clamp(args[i*3+headerlength]), clamp(args[i*3+1+headerlength]), clamp(args[i*3+2+headerlength]))
+            pixels.append( pixel )
+        return ChromaMessage(pixels,name,streamclass,framenumber,creator,description, timestamp, pid)
+    
+
+
+
+import threading
+import urllib2
+import simplejson
+import time
+streamurl = "http://lab2.acm.uiuc.edu:8009/sendstream"
+class StreamPoster( threading.Thread):
+    
+    def run(self):
+        self.pixels = []
+        self.keepRunning = True
+	self.metadata = None
+	while self.keepRunning:
+	   if self.metadata:
+	       jsondata = simplejson.dumps({"colors":self.pixels, "title":self.metadata.title, "creator": self.metadata.creator})
+	       #print "Sending to server: %s data: %s"%(streamurl, jsondata)
+	       try:
+		urllib2.urlopen(streamurl, "data="+jsondata)
+	       except:
+		pass
+           time.sleep(1.0/12.0)
+ 
+
+
+import os
+import sys
+
+class ColorsOut:
+    def __init__(self, streamclass="something"):
+        self.client = OSCClient()
+        self.client.connect( ("localhost",11661) )
+	self.title = "Something went wrong"
+	try:
+	  print "argv[0] "+sys.argv[0]
+	  print "getcwd "+os.getcwd()
+	  path = os.getcwd()+"/"+sys.argv[0]
+	  path = path.replace("main.py","")
+	  manifest = open(path+"manifest.json")
+	  data = simplejson.load(manifest)
+	  self.title = data["name"]
+	  self.creator = data["creator"]
+	  self.description = data["description"]
+	  manifest.close()
+	except:
+	  print "Hey we died"
+
+        self.framenumber = 0
+        self.streamclass = streamclass
+
+    def write(self, pixels):
+        #pixels = self.crazyMofoingReorderingOfLights(pixels)
+        chroma = ChromaMessage(pixels, self.title, self.streamclass, self.framenumber, self.creator, self.description)
+        message = chroma.toOSC("/setcolors")
+        self.client.send( message )
+        self.framenumber += 1
+
+
+
 
 
 
@@ -290,6 +340,13 @@ class ColorsOut:
 
 
 if __name__ == "__main__":
+    import signal
+    import sys
     if not STAGING:
         import octoapi
-    ColorsIn().start()
+    colors = ColorsIn()
+    def signal_handler(signal, frame):
+        colors.streamer.keepRunning=False
+        sys.exit(0)
+    signal.signal(signal.SIGINT, signal_handler)
+    colors.start()
